@@ -7,6 +7,12 @@ from collections import defaultdict
 
 import numpy as np
 
+### CONSTANTS ###
+N_ACTIONS = 4
+N_HEADINGS = 2
+DEFAULT_HEADING = 0
+DEFAULT_ACTION = 2
+
 ### Cost Functions ###
 
 # Cost function weightins in declaration order
@@ -71,50 +77,70 @@ class Floor:
         self.down_button = 0
 
         #Passenger arrival parameters
-        self.max_flow_rate = max_flow_rate
-        self.peak_time = peak_time
         self.lambda_func = lambda_func
 
         #Mapped by destination floor to passenger list
-        self.passengers = []
+        self.passengers = set()
 
     def run_iteration(self, cur_time, cars):
         """
         Adds passengers to the floor
         """
+
+        #New passengers arrive
         passenger_count = np.random.poisson(self.lambda_func(cur_time))
-        new_passengers = []
         valid_floors = list(range(self.num_floors))
         valid_floors.pop(self.number)
+        new_passengers = [ Passenger(np.random.choice(valid_floors)) \
+                for i in range(passenger_count) ]
+        self.add_passengers(new_passengers)
 
-        for i in range(passenger_count):
-            new_pass = Passenger(np.random.choice(valid_floors))
-            new_passengers.append(new_pass)
-        self.add_passengers(self, new_passengers)
-
+        # Find cars currently on this floor and board them
         cur_floor_cars = [ car for car in cars if car.cur_floor == self.number ]
-        if not cur_floor_cars:
-            return
 
         up_pass = [ psgr for psgr in self.passengers if psgr.destination > self.number ]
         down_pass = [ psgr for psgr in self.passengers if psgr.destination < self.number ]
-        
-        #Up pass will prefer cars heading up but will also take no heading
-        #Down pass prefers cars heading down but also takes no heading
+
+        # Passengers heading up will only board cars heading up, vice versa
         up_cars = [ car for car in cur_floor_cars if car.heading == 0 ]
         down_cars = [ car for car in cur_floor_cars if car.heading == 1 ]
 
-        #TODO: BOARD PASSENGERS
+        if up_pass and up_cars:
+            up_pass_split = np.array_split(up_pass, len(up_cars))
+            for up_pass_set, car in zip(up_pass_split, up_cars):
+                for psgr in up_pass_set:
+                    car.board_passenger(psgr)
+                    self.passengers.remove(psgr)
+            self.up_button = False
+        elif up_pass and not up_cars:
+            self.up_button = True
+
+        if down_pass and down_cars:
+            down_pass_split = np.array_split(down_pass, len(down_cars))
+            for down_pass_split, car in zip(down_pass_split, down_cars):
+                for psgr in down_pass_split:
+                    car.board_passenger(psgr)
+                    self.passengers.remove(psgr)
+            self.down_button = False
+        elif down_pass and not down_cars:
+            self.down_button = True
+
+        # Increase costs spent for people still on floor
+        for psgr in self.passengers:
+            psgr.out_time += 1
+            if (psgr.destination > self.number and down_cars) or \
+                    (psgr.destination < self.number and up_cars):
+                psgr.pass_count += 1
 
     def add_passengers(self, new_passengers):
         """
         Add passengers who have arrived at a floor and are waiting
         """
         if type(new_passengers) == list:
-            self.passengers.extend(new_passengers)
+            self.passengers.update(new_passengers)
         elif type(new_passengers) == dict or type(new_passengers) == defaultdict:
             for dest, pass_list in new_passengers:
-                self.passengers.extend(pass_list)
+                self.passengers.update(pass_list)
         else:
             raise ValueError("new_passengers must be one of type list or dict")
 
@@ -126,7 +152,7 @@ class Floor:
     def reset(self):
         self.up_button = 0
         self.down_button = 0
-        self.passengers = defaultdict(list)
+        self.passengers = set()
 
 class Car:
     """
@@ -145,12 +171,12 @@ class Car:
         self.heading = 0
 
         #Used for calculating cost
-        self.passengers = []
+        self.passengers = set()
 
         #Only know one passenger per call
         #If multiple people board on the same floor going to the same destination
         #car can only know for sure that one person boarded
-        self.known_passengers = []
+        self.known_passengers = set()
 
     def action(self, act_num):
         # 0: Move up
@@ -162,7 +188,7 @@ class Car:
             self.heading = 1
         elif act_num == 1 and self.cur_floor > 0:
             self.cur_floor -= 1
-            self/heading = 2
+            self.heading = 2
         elif act_num == 2:
             self.heading = 0
         elif act_num == 3:
@@ -170,22 +196,39 @@ class Car:
         return self.cur_floor
 
     def board_passenger(self, passenger):
-        self.passengers.append(passenger)
-        if self.buttons_pushed(passenger.destination) == 0:
+        self.passengers.add(passenger)
+        if self.buttons_pushed[passenger.destination] == 0:
 
             #Add passenger to set of known only if they push a new button
-            self.known_passengers.append(passenger)
+            self.known_passengers.add(passenger)
+            self.buttons_pushed[passenger.destination] = 1
+        passenger.in_car = True
+
+    def run_iteration(self):
+        """
+        Disembark passengers and update cost of everyone else
+        """
+        disembarked = set()
+        for psgr in self.passengers:
+            if self.cur_floor == psgr.destination:
+                disembarked.add(psgr)
+                if psgr in self.known_passengers:
+                    self.known_passengers.remove(psgr)
+            else:
+                psgr.in_time += 1
+        self.passengers = self.passengers - disembarked
 
     def reset(self):
         self.cur_floor = self.default_floor
         self.buttons_pushed = [0 for i in range(self.num_floors)]
-        self.passengers = []
-        self.known_passengers = []
+        self.passengers = set()
+        self.known_passengers = set()
 
 class Elevator:
     """
     floors: List of floors in elevator system
     cars: List of cars in elevator system
+    lambda_funcs are applied in floor order
     """
     def __init__(self, num_floors, num_cars, lambda_funcs):
         assert(num_floors == len(lambda_funcs))
@@ -194,8 +237,9 @@ class Elevator:
         self.num_cars = num_cars
         self.floors = [ Floor(i, self.num_floors, lambda_funcs[i]) for i in range(num_floors) ]
         self.cars = [ Car(i, num_floors) for i in range(num_cars) ]
+        self.lambda_funcs = lambda_funcs
 
-        self.nfeats = num_cars * 2 + 2
+        self.nfeats = self.state().shape[1]
 
     def run_iteration(self, cur_time, actions):
         """
@@ -205,6 +249,8 @@ class Elevator:
             car.action(act)
         for floor in self.floors:
             floor.run_iteration(cur_time, self.cars)
+        for car in self.cars:
+            car.run_iteration()
 
     def reset(self):
         for floor in self.floors:
@@ -216,7 +262,7 @@ class Elevator:
         """
         Returns n x m feature matrix where n is the number of floors and
         m is the number of features
-        m = (2 + 3) for each car + 2 for outside buttons
+        m = (2 + 2) for each car + 2 for outside buttons
         """
 
         #Outside button feature vectors
@@ -232,8 +278,8 @@ class Elevator:
             feature_vecs.append(car.buttons_pushed)
 
             #Heading vectors per car
-            heading_vecs = [ np.zeros(self.num_floors) if i == car.heading \
-                             else np.ones(self.num_floors) for i in range(2) ]
+            heading_vecs = [ np.ones(self.num_floors) if i == car.heading \
+                             else np.zeros(self.num_floors) for i in range(N_HEADINGS) ]
             feature_vecs.extend(heading_vecs)
 
         #Features in cols

@@ -14,3 +14,15 @@ def plot_dqn_cost(total_costs, known_costs):
         yaxis=dict(title="Total cost, negative")
     )
     iplot(fig)
+
+def plot_simple_cost(costs):
+    iteration_idx = list(range(len(costs)))
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=iteration_idx, y=costs, name='cost'))
+    fig.layout.update(
+        title="Cost",
+        xaxis=dict(title="Iteration index"),
+        yaxis=dict(title="Cost, negative")
+    )
+    iplot(fig)
+

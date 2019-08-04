@@ -45,7 +45,6 @@ def overall_cost(passengers):
             _COST_WEIGHTS[2] * pass_count_cost(p.pass_count)
     return total_cost
 
-
 ### Elevator Environment ###
 class Passenger:
     """
@@ -220,6 +219,7 @@ class Car:
 
     def reset(self):
         self.cur_floor = self.default_floor
+        self.heading = 0
         self.buttons_pushed = [0 for i in range(self.num_floors)]
         self.passengers = set()
         self.known_passengers = set()
